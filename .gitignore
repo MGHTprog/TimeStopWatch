@@ -1,0 +1,40 @@
+# IDE and local machine settings
+*.iml
+/.idea/
+/local.properties
+.DS_Store
+
+# Gradle and generated artifacts
+.gradle/
+**/build/
+/dist/
+/captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+
+# Local validation: device screenshots, logs, transcripts
+/validation/
+/.agents/
+/.codex/
+/.aws/
+
+# Credentials and signing material
+.env
+.env.*
+!.env.example
+.signing/
+*.jks
+*.keystore
+*.pem
+*.key
+
+# Never publish speech recordings; keep the generated Mandarin test fixture
+*.wav
+*.aiff
+*.m4a
+*.pcm
+!/app/src/androidTest/assets/mandarin.wav
+__pycache__/
+*.class
