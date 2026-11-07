@@ -78,11 +78,12 @@ public final class SpeechCapture {
     private void capture(Runnable stopped) {
         AudioRecord input = null;
         try (WavFile wav = new WavFile(file)) {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO);
             int minimum = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
             if (minimum <= 0) throw new IOException("Microphone format unsupported");
             if (!active) return;
             input = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, 16000,
-                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, Math.max(minimum, 5120));
+                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, Math.max(minimum, 32000));
             if (input.getState() != AudioRecord.STATE_INITIALIZED) throw new IOException("Microphone unavailable");
             input.startRecording();
             if (input.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) throw new IOException("Microphone unavailable");

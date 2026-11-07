@@ -14,8 +14,8 @@ android {
         applicationId = "com.mght.timestopwatch"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -23,6 +23,8 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Keep the certificate used by existing installations so v2.0 upgrades in place.
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -33,6 +35,8 @@ android {
 }
 
 dependencies {
+    // Bundled model: agenda recognition also works without Google Play or a network connection.
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
     implementation("net.java.dev.jna:jna:5.18.1@aar")
     implementation("com.alphacephei:vosk-android:0.3.75@aar")
     implementation(libs.appcompat)

@@ -26,6 +26,29 @@ public class WavFileTest {
         } finally { file.delete(); }
     }
 
+    @Test public void preservesEverySampleAcrossHeaderRefreshesAndShortReads() throws Exception {
+        File file = File.createTempFile("speech-continuity", ".wav");
+        int total = 0;
+        try {
+            try (WavFile output = new WavFile(file)) {
+                short[] pcm = new short[8000];
+                for (int block = 0; block < 250; block++) {
+                    int count = block == 0 ? pcm.length : (block % 319) + 1;
+                    for (int j = 0; j < count; j++) pcm[j] = (short) (total + j);
+                    output.write(pcm, count);
+                    total += count;
+                }
+            }
+            try (RandomAccessFile input = new RandomAccessFile(file, "r")) {
+                assertEquals(44L + total * 2L, input.length());
+                input.seek(40);
+                assertEquals(total * 2, Integer.reverseBytes(input.readInt()));
+                for (int j = 0; j < total; j++)
+                    assertEquals("PCM sample " + j, (short) j, Short.reverseBytes(input.readShort()));
+            }
+        } finally { file.delete(); }
+    }
+
     @Test public void headerIsRefreshedBeforeCloseForRecoverableLongRecordings() throws Exception {
         File file = File.createTempFile("speech-recover", ".wav");
         try {

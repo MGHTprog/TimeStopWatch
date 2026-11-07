@@ -49,7 +49,8 @@ public class TimerDeviceTest {
             androidx.test.espresso.Espresso.closeSoftKeyboard();
             onView(withText("保存")).perform(click());
 
-            onView(withText("＋ 添加演讲者（可选）")).perform(click());
+            onView(withText("选择演讲者（可选）")).perform(click());
+            onView(withText("新增演讲者")).perform(click());
             onView(androidx.test.espresso.matcher.ViewMatchers.withHint("演讲者姓名"))
                     .perform(replaceText("真机验证"));
             androidx.test.espresso.Espresso.closeSoftKeyboard();
@@ -84,6 +85,17 @@ public class TimerDeviceTest {
             scenario.onActivity(activity -> assertNull(findText(activity.findViewById(android.R.id.content), "按铃 · 红牌后已满30秒")));
             clickInActivity(scenario, "继续计时");
             waitForText(scenario, "按铃 · 红牌后已满30秒", 32000);
+            scenario.onActivity(activity -> {
+                try {
+                    java.lang.reflect.Field field = MainActivity.class.getDeclaredField("bellPlayer");
+                    field.setAccessible(true);
+                    android.media.MediaPlayer player = (android.media.MediaPlayer) field.get(activity);
+                    assertNotNull("Bell audio player was created at the deadline", player);
+                    assertTrue("Bell audio is playing on the device", player.isPlaying());
+                } catch (ReflectiveOperationException exception) {
+                    throw new AssertionError(exception);
+                }
+            });
             clickInActivity(scenario, "暂停计时");
             scenario.onActivity(activity -> {
                 ProgressBar progress = findProgress(activity.findViewById(android.R.id.content));
@@ -106,7 +118,17 @@ public class TimerDeviceTest {
             AtomicReference<String> records = new AtomicReference<>();
             scenario.onActivity(activity -> records.set(findContaining(activity.findViewById(android.R.id.content), "自定义 / 超过红牌时间")));
             assertNotNull("Finished session is saved and visible", records.get());
-            onView(withText(containsString("自定义 / 超过红牌时间"))).perform(scrollTo());
+            AtomicReference<String> latestTag = new AtomicReference<>();
+            scenario.onActivity(activity -> {
+                try {
+                    org.json.JSONArray saved = new org.json.JSONArray(activity.getSharedPreferences("time_officer", 0).getString("records", "[]"));
+                    latestTag.set("speech-record-" + saved.getJSONObject(saved.length() - 1).getString("id"));
+                } catch (org.json.JSONException exception) { throw new AssertionError(exception); }
+            });
+            onView(allOf(withText(containsString("自定义 / 超过红牌时间")),
+                    androidx.test.espresso.matcher.ViewMatchers.isDescendantOfA(
+                            androidx.test.espresso.matcher.ViewMatchers.withTagValue(org.hamcrest.Matchers.is(latestTag.get())))))
+                    .perform(scrollTo());
             screenshot("05-recorded.png");
             scenario.recreate();
             scenario.onActivity(activity -> assertNotNull(findContaining(activity.findViewById(android.R.id.content), "自定义 / 超过红牌时间")));
@@ -116,7 +138,7 @@ public class TimerDeviceTest {
             Thread.sleep(200);
             clickInActivity(scenario, "暂停计时");
             clickInActivity(scenario, "重置");
-            onView(withText("重置")).perform(click());
+            onView(withText("重置")).inRoot(androidx.test.espresso.matcher.RootMatchers.isDialog()).perform(click());
             assertEquals("00:00", clockText(scenario));
             assertText(scenario, "开始计时");
             scenario.onActivity(activity -> assertTrue(findText(activity.findViewById(android.R.id.content),

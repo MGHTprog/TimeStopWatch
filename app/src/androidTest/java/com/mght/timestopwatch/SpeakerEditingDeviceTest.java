@@ -23,7 +23,8 @@ public class SpeakerEditingDeviceTest {
     @Test public void editWhileRunningAndFullscreenSavesLatestName() throws Exception {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             onView(withText("开始计时")).perform(scrollTo(), click());
-            onView(withText("＋ 添加演讲者（可选）")).perform(scrollTo(), click());
+            onView(withText("选择演讲者（可选）")).perform(scrollTo(), click());
+            onView(withText("新增演讲者")).perform(click());
             onView(withHint("演讲者姓名")).perform(replaceText("计时中改名验证"));
             closeSoftKeyboard();
             onView(withText("保存")).perform(click());
@@ -36,9 +37,15 @@ public class SpeakerEditingDeviceTest {
             });
             onView(withText("全屏举牌")).perform(scrollTo(), click());
             onView(withText("演讲者：计时中改名验证")).perform(scrollTo(), click());
+            onView(withText("新增演讲者")).perform(click());
             onView(withHint("演讲者姓名")).perform(replaceText("全屏改名验证"));
             closeSoftKeyboard();
             onView(withText("保存")).perform(click());
+            onView(withText("演讲者：全屏改名验证")).perform(scrollTo(), click());
+            onView(withText("计时中改名验证")).perform(click());
+            scenario.recreate();
+            onView(withText("演讲者：计时中改名验证")).perform(scrollTo(), click());
+            onView(withText("全屏改名验证")).perform(click());
             onView(withText("结束并记录")).perform(scrollTo(), click());
             onView(withText(containsString("全屏改名验证"))).perform(scrollTo());
         }

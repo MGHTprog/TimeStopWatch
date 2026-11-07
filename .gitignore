@@ -36,5 +36,6 @@
 *.m4a
 *.pcm
 !/app/src/androidTest/assets/mandarin.wav
+!/app/src/main/res/raw/bell.wav
 __pycache__/
 *.class
