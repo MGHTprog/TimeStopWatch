@@ -21,7 +21,9 @@ public final class SpeechCapture {
         void onVoice(long onset);
         void onError();
     }
+    static final String STANDARD_MIC = "standardMic";
     public final File file;
+    private final int audioSource;
     private final Handler main = new Handler(Looper.getMainLooper());
     private volatile Listener listener;
     private volatile boolean active = true;
@@ -39,6 +41,9 @@ public final class SpeechCapture {
         if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Cannot create recordings");
         file = new File(directory, UUID.randomUUID() + ".wav");
         this.armed = armed;
+        audioSource = context.getSharedPreferences("time_officer", Context.MODE_PRIVATE)
+                .getBoolean(STANDARD_MIC, false) ? MediaRecorder.AudioSource.MIC
+                : MediaRecorder.AudioSource.VOICE_RECOGNITION;
     }
 
     public void setListener(Listener listener) {
@@ -82,7 +87,7 @@ public final class SpeechCapture {
             int minimum = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
             if (minimum <= 0) throw new IOException("Microphone format unsupported");
             if (!active) return;
-            input = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, 16000,
+            input = new AudioRecord(audioSource, 16000,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, Math.max(minimum, 32000));
             if (input.getState() != AudioRecord.STATE_INITIALIZED) throw new IOException("Microphone unavailable");
             input.startRecording();

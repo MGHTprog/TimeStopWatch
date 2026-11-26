@@ -25,6 +25,22 @@ public class TimerSessionTest {
         assertEquals(3, TimerSession.stage(240000, 60, 90, 120));
     }
 
+    @Test public void recordStatusUsesTheLastReachedCard() {
+        assertEquals("未到绿牌", TimerSession.recordStatus(59999, true, 60, 90, 120));
+        assertEquals("已到绿牌", TimerSession.recordStatus(60000, true, 60, 90, 120));
+        assertEquals("已到绿牌", TimerSession.recordStatus(89999, true, 60, 90, 120));
+        assertEquals("已到黄牌", TimerSession.recordStatus(90000, true, 60, 90, 120));
+        assertEquals("已到黄牌", TimerSession.recordStatus(119999, true, 60, 90, 120));
+        assertEquals("已到红牌", TimerSession.recordStatus(120000, true, 60, 90, 120));
+        assertEquals("超过红牌时间", TimerSession.recordStatus(120001, true, 60, 90, 120));
+    }
+
+    @Test public void recordStatusForOrdinaryTimerDoesNotShowCards() {
+        assertEquals("普通计时", TimerSession.recordStatus(90000, false, 60, 90, 120));
+        assertEquals("普通计时", TimerSession.recordStatus(120000, false, 60, 90, 120));
+        assertEquals("超出计划时间", TimerSession.recordStatus(120001, false, 60, 90, 120));
+    }
+
     @Test public void bellStartsExactlyThirtySecondsAfterRed() {
         assertFalse(TimerSession.isBellDue(149999, 120));
         assertTrue(TimerSession.isBellDue(150000, 120));

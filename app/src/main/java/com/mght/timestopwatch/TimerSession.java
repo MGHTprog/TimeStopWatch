@@ -40,6 +40,18 @@ public final class TimerSession {
         return elapsed >= ((long) red + 30) * 1000;
     }
 
+    static String recordStatus(long elapsed, boolean cardsEnabled, int green, int yellow, int red) {
+        boolean overtime = elapsed > red * 1000L;
+        if (!cardsEnabled) return overtime ? "超出计划时间" : "普通计时";
+        if (overtime) return "超过红牌时间";
+        switch (stage(elapsed, green, yellow, red)) {
+            case 3: return "已到红牌";
+            case 2: return "已到黄牌";
+            case 1: return "已到绿牌";
+            default: return "未到绿牌";
+        }
+    }
+
     public static int stage(long elapsed, int green, int yellow, int red) {
         long seconds = elapsed / 1000;
         if (seconds >= red) return 3;

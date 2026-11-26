@@ -8,7 +8,10 @@ import android.net.Uri;
 import android.media.MediaPlayer;
 import android.widget.Toast;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.UUID;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
@@ -74,6 +77,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean bellNotified;
     private TextView clock, stageLabel, nextLabel, recordsView, presetLabel, totalLabel;
     private TextView agendaCurrent, agendaOverall, agendaActual, agendaActualItem;
+    private AgendaTimeMap agendaTimeMap;
     private ProgressBar agendaProgress, agendaItemProgress, agendaActualOverallProgress, agendaActualProgress;
     private final ArrayList<AgendaItem> agendaItems = new ArrayList<>();
     private Uri pendingAgendaPhoto;
@@ -83,11 +87,12 @@ public class MainActivity extends AppCompatActivity {
     private int activeAgendaIndex = -1;
     private int agendaActualBaseSeconds;
     private ProgressBar timeProgress;
-    private Button startButton, settingsButton, speakerButton, voiceButton;
+    private Button startButton, settingsButton, speakerButton, voiceButton, finishButton, finishNext;
     private TextView voiceStatus;
     private VoiceMonitor voiceMonitor;
     private SpeechCapture recording;
     private File retainedAudio;
+    private File pendingAudioExport;
     private boolean recordEnabled = true;
     private boolean recordingUnavailable;
     private int permissionAction;
@@ -129,6 +134,21 @@ public class MainActivity extends AppCompatActivity {
     private final ActivityResultLauncher<Uri> agendaCamera = registerForActivityResult(
             new ActivityResultContracts.TakePicture(), saved -> {
                 if (saved && pendingAgendaPhoto != null) parseAgendaImage(pendingAgendaPhoto);
+            });
+    private final ActivityResultLauncher<String> audioExporter = registerForActivityResult(
+            new ActivityResultContracts.CreateDocument("audio/wav"), uri -> {
+                File source = pendingAudioExport;
+                pendingAudioExport = null;
+                if (uri == null || source == null) return;
+                try (InputStream input = new FileInputStream(source);
+                     OutputStream output = getContentResolver().openOutputStream(uri, "w")) {
+                    if (output == null) throw new IOException("无法打开保存位置");
+                    byte[] buffer = new byte[8192]; int count;
+                    while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+                    Toast.makeText(this, "录音已导出", Toast.LENGTH_LONG).show();
+                } catch (IOException error) {
+                    Toast.makeText(this, "导出失败：" + error.getMessage(), Toast.LENGTH_LONG).show();
+                }
             });
     private int green = 60, yellow = 90, red = 120;
     private boolean cardsEnabled = true;
@@ -206,10 +226,21 @@ public class MainActivity extends AppCompatActivity {
     private void buildScreen() {
         displayedState = "";
         root.removeAllViews();
+        agendaTimeMap = null;
         LinearLayout content = column();
         content.setPadding(dp(fullScreen ? 8 : 12), dp(fullScreen ? 8 : 10), dp(fullScreen ? 8 : 12), dp(10));
-        root.addView(content, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        FrameLayout.LayoutParams screenSize = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        if (!fullScreen && !agendaItems.isEmpty()) {
+            // Long agenda text can expand without pushing timer controls out of reach.
+            ScrollView dashboard = new ScrollView(this);
+            dashboard.setFillViewport(true);
+            dashboard.addView(content, new ScrollView.LayoutParams(
+                    ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.WRAP_CONTENT));
+            root.addView(dashboard, screenSize);
+        } else {
+            root.addView(content, screenSize);
+        }
         if (!fullScreen) {
             LinearLayout header = row();
             TextView title = label("头马时间官", 22, Color.WHITE);
@@ -294,14 +325,19 @@ public class MainActivity extends AppCompatActivity {
                     .setMessage("当前计时和本轮录音将清空。如需保留，请先结束并记录。")
                     .setNegativeButton("取消", null).setPositiveButton("重置", (dialog, which) -> resetTimer()).show();
         });
-        Button finish = button("停止并保存", PANEL, Color.WHITE);
-        finish.setOnClickListener(v -> finishSession(false));
+        finishButton = button("停止并保存", PANEL, Color.WHITE);
+        finishButton.setOnClickListener(v -> finishSession(false));
         actions.addView(reset, weighted());
-        actions.addView(finish, weighted());
+        actions.addView(finishButton, weighted());
         add(content, actions, 6);
-        Button finishNext = button("停止保存 · 切到下一环节", PANEL, Color.WHITE);
-        finishNext.setOnClickListener(v -> finishSession(true));
-        finishNext.setEnabled(nextAgendaIndex() >= 0);
+        finishNext = button("停止保存 · 切到下一环节", PANEL, Color.WHITE);
+        finishNext.setOnClickListener(v -> {
+            if (timer.isRunning() || timer.elapsed(SystemClock.elapsedRealtime()) > 0) {
+                finishSession(true);
+            } else if (!voiceArmed && nextAgendaIndex() >= 0) {
+                applyAgendaItem(nextAgendaIndex());
+            }
+        });
         Button fullscreenButton = button(fullScreen ? "返回控制台" : "全屏举牌", PANEL, Color.WHITE);
         fullscreenButton.setOnClickListener(v -> { fullScreen = !fullScreen; buildScreen(); });
         LinearLayout secondaryActions = row();
@@ -379,6 +415,9 @@ public class MainActivity extends AppCompatActivity {
         startButton.setText(timer.isRunning() ? "暂停计时" : elapsed > 0 ? "继续计时" : "开始计时");
         voiceButton.setText(voiceArmed ? "取消语音待命" : "语音待命");
         voiceButton.setEnabled(voiceArmed || (!timer.isRunning() && elapsed == 0));
+        finishButton.setText(isTableTopics(preset) ? "保存本位 · 留在即兴" : "停止并保存");
+        finishNext.setText(timer.isRunning() || elapsed > 0 ? "停止保存 · 切到下一环节" : "切到下一环节");
+        finishNext.setEnabled(!voiceArmed && nextAgendaIndex() >= 0);
         String audioStatus = "";
         if (recording != null && !recording.hasFailed() && !voiceArmed)
             audioStatus = timer.isRunning() ? "\n正在录音，结束后在本机生成中文文字稿" : "\n录音已暂停，继续计时后恢复";
@@ -784,13 +823,11 @@ public class MainActivity extends AppCompatActivity {
         actualTitle.setTypeface(null, Typeface.BOLD);
         actualPanel.addView(actualTitle);
         agendaActual = label("", 11, Color.WHITE);
-        agendaActual.setMaxLines(2);
         add(actualPanel, agendaActual, 3);
         agendaActualOverallProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         agendaActualOverallProgress.setProgressTintList(ColorStateList.valueOf(0xFF78DCC5));
         add(actualPanel, agendaActualOverallProgress, 3);
         agendaActualItem = label("", 11, Color.WHITE);
-        agendaActualItem.setMaxLines(2);
         add(actualPanel, agendaActualItem, 4);
         agendaActualProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         agendaActualProgress.setProgressTintList(ColorStateList.valueOf(0xFF78DCC5));
@@ -798,9 +835,17 @@ public class MainActivity extends AppCompatActivity {
         timeBlocks.addView(actualPanel, weighted());
         panel.addView(timeBlocks);
 
-        Button all = button("查看议程 / 选择计时项目", BACKGROUND, Color.WHITE);
-        all.setOnClickListener(v -> showAgendaItems());
-        add(panel, all, 4);
+        LinearLayout mapPanel = column();
+        mapPanel.setPadding(dp(8), dp(4), dp(8), dp(4));
+        mapPanel.setBackground(background(BACKGROUND));
+        mapPanel.setFocusable(true);
+        mapPanel.setOnClickListener(v -> showAgendaItems());
+        mapPanel.addView(label("时间地图 · 点按查看议程", 13, Color.WHITE));
+        agendaTimeMap = new AgendaTimeMap(this, agendaItems);
+        mapPanel.addView(agendaTimeMap, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(20)));
+        mapPanel.addView(label("白线：当前时刻 · 黄块：现场所选 · 灰色：空档", 11, MUTED));
+        add(panel, mapPanel, 4);
         add(content, panel, 4);
     }
 
@@ -814,6 +859,12 @@ public class MainActivity extends AppCompatActivity {
         int meetingStart = (agendaOfficialStart >= 0 ? agendaOfficialStart : first.startMinute) * 60;
         int meetingEnd = (agendaOfficialEnd > agendaOfficialStart ? agendaOfficialEnd : last.endMinute) * 60;
         int meetingLength = Math.max(1, meetingEnd - meetingStart);
+        if (meetingEnd > 86400) {
+            // For an overnight agenda, use the occurrence closest to the meeting midpoint.
+            long midpoint = meetingStart + meetingLength / 2L;
+            if (Math.abs(midpoint - (secondOfDay + 86400L)) < Math.abs(midpoint - secondOfDay)) secondOfDay += 86400;
+        }
+        if (agendaTimeMap != null) agendaTimeMap.update(meetingStart, meetingEnd, secondOfDay, activeAgendaIndex);
         agendaProgress.setMax(meetingLength);
         agendaProgress.setProgress(Math.max(0, Math.min(meetingLength, secondOfDay - meetingStart)));
         int percent = Math.max(0, Math.min(100, (secondOfDay - meetingStart) * 100 / meetingLength));
@@ -912,9 +963,108 @@ public class MainActivity extends AppCompatActivity {
         if (agendaItems.isEmpty()) return;
         String[] labels = new String[agendaItems.size()];
         for (int i = 0; i < labels.length; i++) labels[i] = agendaItems.get(i).label();
-        new AlertDialog.Builder(this).setTitle("会议议程（点击进入单项计时）")
-                .setItems(labels, (dialog, which) -> applyAgendaItem(which))
+        new AlertDialog.Builder(this).setTitle("会议议程")
+                .setItems(labels, (dialog, which) -> {
+                    if (agendaLocked()) {
+                        Toast.makeText(this, "请先结束或重置当前计时", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    new AlertDialog.Builder(this).setTitle(agendaItems.get(which).activity)
+                            .setItems(new String[]{"进入单项计时", "编辑此环节"}, (action, choice) -> {
+                                if (choice == 0) applyAgendaItem(which);
+                                else editAgendaItem(which);
+                            })
+                            .setNegativeButton("返回议程", (action, choice) -> showAgendaItems()).show();
+                })
                 .setNegativeButton("关闭", null).show();
+    }
+
+    private boolean agendaLocked() {
+        return timer.isRunning() || timer.elapsed(SystemClock.elapsedRealtime()) > 0 || voiceArmed;
+    }
+
+    private EditText agendaField(LinearLayout fields, String caption, String value, int inputType) {
+        fields.addView(label(caption, 14, MUTED));
+        EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setInputType(inputType);
+        input.setText(value);
+        fields.addView(input);
+        return input;
+    }
+
+    private static int parseAgendaClock(String text) {
+        String time = text.trim().replace('：', ':');
+        if (!time.matches("(?:[01]?\\d|2[0-3]):[0-5]\\d")) return -1;
+        int colon = time.indexOf(':');
+        return Integer.parseInt(time.substring(0, colon)) * 60 + Integer.parseInt(time.substring(colon + 1));
+    }
+
+    private void editAgendaItem(int index) {
+        AgendaItem item = agendaItems.get(index);
+        LinearLayout fields = column();
+        fields.setPadding(dp(24), dp(8), dp(24), dp(12));
+        EditText activity = agendaField(fields, "环节内容", item.activity, android.text.InputType.TYPE_CLASS_TEXT);
+        EditText role = agendaField(fields, "人物 / 角色（可选）", item.role, android.text.InputType.TYPE_CLASS_TEXT);
+        int timeInput = android.text.InputType.TYPE_CLASS_DATETIME | android.text.InputType.TYPE_DATETIME_VARIATION_TIME;
+        EditText startTime = agendaField(fields, "开始时间（24小时制）", AgendaItem.clock(item.startMinute), timeInput);
+        EditText endTime = agendaField(fields, "结束时间（24小时制）", AgendaItem.clock(item.endMinute), timeInput);
+        CheckBox cards = new CheckBox(this);
+        cards.setText("需要举牌（即兴演讲按每人时长设置举牌）");
+        cards.setChecked(item.requiresCards);
+        fields.addView(cards);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(fields);
+        AlertDialog editor = new AlertDialog.Builder(this).setTitle("编辑此环节").setView(scroll)
+                .setNegativeButton("取消", (dialog, which) -> showAgendaItems())
+                .setPositiveButton("保存", null).create();
+        editor.setOnShowListener(ignored -> editor.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String name = activity.getText().toString().trim();
+            if (name.isEmpty()) { activity.setError("请输入环节内容"); return; }
+            int startClock = parseAgendaClock(startTime.getText().toString());
+            int endClock = parseAgendaClock(endTime.getText().toString());
+            if (startClock < 0) { startTime.setError("请输入有效时间，例如 19:30"); return; }
+            if (endClock < 0) { endTime.setError("请输入有效时间，例如 19:45"); return; }
+            // A clock edit keeps the start on the item's existing agenda day.
+            int start = item.startMinute / 1440 * 1440 + startClock;
+            int minutes = (endClock - startClock + 1440) % 1440;
+            if (minutes == 0 || minutes > 720) {
+                endTime.setError("时长须为 1 分钟至 12 小时；跨午夜可填写次日时间");
+                return;
+            }
+            int end = start + minutes;
+            boolean last = index == agendaItems.size() - 1;
+            if (index > 0 && start < agendaItems.get(index - 1).endMinute) {
+                startTime.setError("开始时间不能早于上一环节结束时间");
+                return;
+            }
+            if (!last && end > agendaItems.get(index + 1).startMinute) {
+                endTime.setError("结束时间不能晚于下一环节开始时间");
+                return;
+            }
+            if (index == 0 && (agendaOfficialStart == item.startMinute || start < agendaOfficialStart)) agendaOfficialStart = start;
+            if (last && (agendaOfficialEnd == item.endMinute || end > agendaOfficialEnd)) agendaOfficialEnd = end;
+            item.activity = name;
+            item.role = role.getText().toString().trim();
+            item.requiresCards = isTableTopics(name) || cards.isChecked();
+            item.minutes = minutes;
+            item.startMinute = start;
+            item.endMinute = end;
+            item.inferred = false;
+            saveAgenda();
+            if (activeAgendaIndex == index) {
+                selectSpeaker("");
+                applyAgendaItem(index);
+            } else if (index == 0 && activeAgendaIndex >= 0) {
+                int meetingStart = agendaOfficialStart >= 0 ? agendaOfficialStart : start;
+                agendaActualBaseSeconds = Math.max(0, (agendaItems.get(activeAgendaIndex).startMinute - meetingStart) * 60);
+                preferences.edit().putInt("agendaActualBaseSeconds", agendaActualBaseSeconds).apply();
+            }
+            editor.dismiss();
+            buildScreen();
+            showAgendaItems();
+        }));
+        editor.show();
     }
 
     private void applyAgendaItem(int index) {
@@ -933,12 +1083,15 @@ public class MainActivity extends AppCompatActivity {
         preferences.edit().putInt("activeAgendaIndex", index)
                 .putInt("agendaActualBaseSeconds", agendaActualBaseSeconds).apply();
         int total = item.minutes * 60;
-        if (item.requiresCards) {
+        if (isTableTopics(item.activity)) {
+            selectSpeaker("");
+            applyTableTopics(item.activity);
+        } else if (item.requiresCards) {
             int g = Math.max(1, total - (item.minutes <= 3 ? 60 : 120));
             int y = Math.max(g + 1, total - (item.minutes <= 3 ? 30 : 60));
             applyTimes(item.activity, g, y, total);
         } else applyNoCardsTime(item.activity, total);
-        if (!item.role.isEmpty()) selectSpeaker(item.role);
+        if (!isTableTopics(item.activity) && !item.role.isEmpty()) selectSpeaker(item.role);
         Toast.makeText(this, "已载入：" + item.label(), Toast.LENGTH_SHORT).show();
     }
 
@@ -995,7 +1148,9 @@ public class MainActivity extends AppCompatActivity {
                 agendaItems.isEmpty() ? "拍照 / 图片导入会议时间表" : "重新导入会议时间表",
                 "录音与文字稿：" + (recordEnabled ? "已开启" : "已关闭"),
                 "震动与按铃提醒：" + (vibration ? "已开启" : "已关闭"),
-                "清除 DeepSeek API Key"
+                "清除 DeepSeek API Key",
+                "即兴演讲时长：" + tableTopicsMinutes() + "分钟 / 人",
+                "录音输入：" + (usesStandardMic() ? "标准麦克风" : "语音识别模式")
         };
         new AlertDialog.Builder(this).setTitle("⚙ 设置").setItems(options, (dialog, which) -> {
             if (which == 0) {
@@ -1016,6 +1171,10 @@ public class MainActivity extends AppCompatActivity {
                 vibration = !vibration;
                 preferences.edit().putBoolean("vibration", vibration).apply();
                 showSettings();
+            } else if (which == 5 || which == 6) {
+                if (locked) Toast.makeText(this, "请先结束或重置当前计时", Toast.LENGTH_SHORT).show();
+                else if (which == 5) chooseTableTopicsMinutes();
+                else chooseRecordingInput();
             } else {
                 SecretStore.clear(this);
                 Toast.makeText(this, "DeepSeek API Key 已清除", Toast.LENGTH_SHORT).show();
@@ -1028,6 +1187,12 @@ public class MainActivity extends AppCompatActivity {
         body.setPadding(dp(18), dp(8), dp(18), dp(12));
         recordsView = label("", 14, MUTED);
         body.addView(recordsView);
+        ArrayList<File> audioFiles = recordingFiles();
+        Button exportFiles = button("导出已有录音文件（" + audioFiles.size() + "）", PANEL, Color.WHITE);
+        exportFiles.setEnabled(!audioFiles.isEmpty());
+        exportFiles.setOnClickListener(v -> showAudioFiles(audioFiles));
+        add(body, exportFiles, 8);
+        if (!recordEnabled) add(body, label("录音功能当前已关闭，新计时不会生成录音。可在齿轮设置中开启。", 12, 0xFFF4C542), 6);
         recordCards = column();
         add(body, recordCards, 8);
         Button clear = button("清空记录", PANEL, MUTED);
@@ -1056,9 +1221,71 @@ public class MainActivity extends AppCompatActivity {
         dialog.show();
     }
 
+    private ArrayList<File> recordingFiles() {
+        ArrayList<File> result = new ArrayList<>();
+        File directory = new File(getFilesDir(), "recordings");
+        File[] files = directory.listFiles(file -> file.isFile() && file.getName().matches("[a-f0-9-]+\\.wav") && file.length() > 44);
+        if (files != null) {
+            java.util.Arrays.sort(files, (left, right) -> Long.compare(right.lastModified(), left.lastModified()));
+            java.util.Collections.addAll(result, files);
+        }
+        return result;
+    }
+
+    private void showAudioFiles(ArrayList<File> files) {
+        String[] labels = new String[files.size()];
+        SimpleDateFormat date = new SimpleDateFormat("MM-dd HH:mm", Locale.CHINA);
+        for (int i = 0; i < files.size(); i++) {
+            File file = files.get(i);
+            labels[i] = date.format(new Date(file.lastModified())) + " · " + Math.max(1, file.length() / 1024) + " KB";
+        }
+        new AlertDialog.Builder(this).setTitle("选择要导出的录音")
+                .setItems(labels, (dialog, which) -> exportRecording(files.get(which), null))
+                .setNegativeButton("取消", null).show();
+    }
+
+    static boolean isTableTopics(String activity) {
+        return activity.contains("即兴") || activity.toLowerCase(Locale.ROOT).contains("table topics");
+    }
+
+    private int tableTopicsMinutes() {
+        return preferences.getInt("tableTopicsMinutes", 2) == 3 ? 3 : 2;
+    }
+
+    private void applyTableTopics(String name) {
+        int total = tableTopicsMinutes() * 60;
+        applyTimes(name, total - 60, total - 30, total);
+    }
+
+    private void chooseTableTopicsMinutes() {
+        new AlertDialog.Builder(this).setTitle("即兴演讲 · 每人时长")
+                .setSingleChoiceItems(new String[]{"2分钟 · 01:00 / 01:30 / 02:00", "3分钟 · 02:00 / 02:30 / 03:00"},
+                        tableTopicsMinutes() - 2, (dialog, which) -> {
+                            preferences.edit().putInt("tableTopicsMinutes", which + 2).apply();
+                            if (isTableTopics(preset)) applyTableTopics(preset);
+                            dialog.dismiss();
+                        })
+                .setNegativeButton("取消", null).show();
+    }
+
+    private boolean usesStandardMic() {
+        return preferences.getBoolean(SpeechCapture.STANDARD_MIC, false);
+    }
+
+    private void chooseRecordingInput() {
+        new AlertDialog.Builder(this).setTitle("录音输入（不同手机效果可能不同）")
+                .setSingleChoiceItems(new String[]{"语音识别模式（默认）", "标准麦克风（可试录对比）"},
+                        usesStandardMic() ? 1 : 0, (dialog, which) -> {
+                            preferences.edit().putBoolean(SpeechCapture.STANDARD_MIC, which == 1).apply();
+                            dialog.dismiss();
+                        })
+                .setNegativeButton("取消", null).show();
+    }
+
     private void choosePreset() {
         String[] names = {"即兴演讲", "演讲评估", "备稿演讲 · 5分钟", "备稿演讲 · 7分钟", "备稿演讲 · 10分钟"};
-        int[][] values = {{60, 90, 120}, {120, 150, 180}, {180, 240, 300}, {300, 360, 420}, {480, 540, 600}};
+        int topics = tableTopicsMinutes() * 60;
+        int[][] values = {{topics - 60, topics - 30, topics}, {120, 150, 180}, {180, 240, 300}, {300, 360, 420}, {480, 540, 600}};
         // Sort by numeric total duration (red card), rather than comparing text such as "10" and "2".
         Integer[] order = new Integer[values.length];
         for (int i = 0; i < order.length; i++) order[i] = i;
@@ -1239,9 +1466,7 @@ public class MainActivity extends AppCompatActivity {
             record.put("speaker", speaker.isEmpty() ? "演讲者 " + (records.length() + 1) : speaker);
             record.put("preset", preset);
             record.put("duration", format(elapsed / 1000));
-            record.put("status", cardsEnabled
-                    ? (elapsed < green * 1000L ? "未到绿牌" : elapsed > red * 1000L ? "超过红牌时间" : "已到绿牌")
-                    : (elapsed > red * 1000L ? "超出计划时间" : "普通计时"));
+            record.put("status", TimerSession.recordStatus(elapsed, cardsEnabled, green, yellow, red));
             record.put("time", new SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(new Date()));
             if (audio != null) {
                 record.put("audio", audio.getName());
@@ -1305,7 +1530,13 @@ public class MainActivity extends AppCompatActivity {
                 Button play = button("回放录音", BACKGROUND, Color.WHITE);
                 play.setEnabled(audio.isFile() && audio.length() > 44);
                 play.setOnClickListener(v -> playRecording(audio));
-                add(entry, play, 8);
+                Button export = button("导出录音", BACKGROUND, Color.WHITE);
+                export.setEnabled(audio.isFile() && audio.length() > 44);
+                export.setOnClickListener(v -> exportRecording(audio, record));
+                LinearLayout audioActions = row();
+                audioActions.addView(play, weighted());
+                audioActions.addView(export, weighted());
+                add(entry, audioActions, 8);
                 String transcript = record.optString("transcript");
                 if (!transcript.isEmpty()) {
                     Button view = button("查看文字稿", BACKGROUND, Color.WHITE);
@@ -1318,7 +1549,7 @@ public class MainActivity extends AppCompatActivity {
                     retry.setOnClickListener(v -> SpeechTranscriber.submit(this, id, audio));
                     add(entry, retry, 6);
                 }
-            }
+            } else add(entry, label("本条记录没有录音（当时录音功能未开启或录音失败）", 12, MUTED), 8);
             add(recordCards, entry, 10);
         }
     }
@@ -1346,6 +1577,23 @@ public class MainActivity extends AppCompatActivity {
             stopPlayback();
             Toast.makeText(this, "录音文件不可用", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private void exportRecording(File audio, JSONObject record) {
+        if (!audio.isFile() || audio.length() <= 44) {
+            Toast.makeText(this, "录音文件不可用", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String speakerName = record == null ? "会议录音" : record.optString("speaker", "会议录音");
+        String recordedAt = record == null
+                ? new SimpleDateFormat("MM-dd-HH-mm", Locale.CHINA).format(new Date(audio.lastModified()))
+                : record.optString("time", "");
+        String filename = (speakerName + (recordedAt.isEmpty() ? "" : "-" + recordedAt))
+                .replaceAll("[^\\p{L}\\p{N}._-]+", "-")
+                .replaceAll("^-+|-+$", "");
+        if (filename.isEmpty()) filename = "会议录音";
+        pendingAudioExport = audio;
+        audioExporter.launch(filename + ".wav");
     }
 
     private void stopPlayback() {
